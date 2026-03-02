@@ -1,0 +1,175 @@
+import { useEffect } from "react"
+import type { ComponentType } from "react"
+
+export function withFormUpload(Component): ComponentType {
+    return (props) => {
+        useEffect(() => {
+            console.log("🔧 FormHandler mounted")
+
+            // ===============================
+            // SESSION ID (persistente por sesión)
+            // ===============================
+            if (!window.rivasSessionId) {
+                window.rivasSessionId = crypto.randomUUID()
+                console.log("🆔 New session_id:", window.rivasSessionId)
+            } else {
+                console.log("♻️ Reusing session_id:", window.rivasSessionId)
+            }
+
+            // Buscar el formulario
+            const form = document.querySelector("form")
+            if (!form) {
+                console.error("❌ Form not found!")
+                return
+            }
+
+            console.log("✅ Form found:", form)
+
+            const handleSubmit = async (event: Event) => {
+                event.preventDefault()
+                event.stopPropagation()
+
+                console.log("🚀 Form submit triggered!")
+                console.log(
+                    "📦 window.tattooPhotos at submit:",
+                    window.tattooPhotos
+                )
+
+                const submitButton = form.querySelector(
+                    'button[type="submit"]'
+                ) as HTMLButtonElement
+                if (!submitButton) {
+                    console.error("❌ Submit button not found!")
+                    return
+                }
+
+                const originalText = submitButton.textContent
+                submitButton.textContent = "Uploading..."
+                submitButton.disabled = true
+
+                try {
+                    // Cargar Supabase
+                    if (typeof window.supabase === "undefined") {
+                        console.log("📥 Loading Supabase...")
+                        await loadSupabase()
+                    }
+
+                    const { createClient } = window.supabase
+                    const supabaseClient = createClient(
+                        "https://rivasindeedapi.hisenzaiautomations.com",
+                        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE"
+                    )
+
+                    const formData = new FormData(form)
+                    const nameArray = [
+                        formData.get("Name") || "",
+                        formData.get("lastName") || "",
+                    ]
+
+                    const payload = {
+                        // ✅ NUEVO — session_id
+                        session_id: window.rivasSessionId,
+
+                        Name: nameArray,
+                        Email: formData.get("Email"),
+                        "Phone Number": formData.get("Phone Number"),
+                        Town: formData.get("Town"),
+                        "Tattoo Color": formData.get("Tattoo Color"),
+                        Idea: formData.get("Idea"),
+                        Area: formData.get("Area"),
+                        Inches: formData.get("Inches"),
+                        Coverup: formData.get("Coverup"),
+                        Referral_Code: formData.get("Referral_Code"),
+                    }
+
+                    console.log("📋 Form data captured:", payload)
+
+                    // Subir fotos
+                    const uploadedPhotos = []
+                    const files = window.tattooPhotos || []
+
+                    console.log("📷 Files to upload:", files.length)
+
+                    if (files.length > 0) {
+                        submitButton.textContent = `Uploading ${files.length} photo${files.length > 1 ? "s" : ""}...`
+
+                        for (let i = 0; i < files.length; i++) {
+                            const file = files[i]
+                            const fileExt = file.name.split(".").pop()
+                            const fileName = `${Date.now()}_${i}_${Math.random()
+                                .toString(36)
+                                .substring(7)}.${fileExt}`
+                            const filePath = `${payload.Email}/${fileName}`
+
+                            const { error } = await supabaseClient.storage
+                                .from("tattoo-inspiration")
+                                .upload(filePath, file, {
+                                    cacheControl: "3600",
+                                    upsert: false,
+                                })
+
+                            if (!error) {
+                                const {
+                                    data: { publicUrl },
+                                } = supabaseClient.storage
+                                    .from("tattoo-inspiration")
+                                    .getPublicUrl(filePath)
+
+                                uploadedPhotos.push(publicUrl)
+                            }
+                        }
+                    }
+
+                    payload.tattoo_photos = uploadedPhotos.join(", ")
+                    payload.total_photos = uploadedPhotos.length
+
+                    console.log("📦 Final payload:", payload)
+
+                    // Enviar a n8n
+                    await fetch(
+                        "https://rivasindeed.hisenzaiautomations.com/webhook/collector",
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ body: payload }),
+                        }
+                    )
+
+                    submitButton.textContent = "✓ Sent!"
+                    form.reset()
+                    window.tattooPhotos = []
+
+                    setTimeout(() => {
+                        window.location.href =
+                            "https://cal.com/rivas-indeed/one-hour-personalized-consultation"
+                    }, 2000)
+                } catch (error) {
+                    console.error("❌ Error:", error)
+                    submitButton.textContent = "Error - Try again"
+                    submitButton.disabled = false
+                }
+            }
+
+            form.addEventListener("submit", handleSubmit)
+
+            return () => {
+                form.removeEventListener("submit", handleSubmit)
+            }
+        }, [])
+
+        return <Component {...props} />
+    }
+}
+
+function loadSupabase() {
+    return new Promise((resolve, reject) => {
+        if (document.getElementById("supabase-script")) return resolve()
+
+        const script = document.createElement("script")
+        script.id = "supabase-script"
+        script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
+        script.onload = resolve
+        script.onerror = reject
+        document.head.appendChild(script)
+    })
+}
